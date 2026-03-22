@@ -1,0 +1,31 @@
+[Unit]
+Description=ZTNA DTLS Server (Control Plane + Data Plane)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=root
+WorkingDirectory=/opt/ztna
+
+# Flask コントロールプレーンをバックグラウンド起動
+ExecStartPre=/opt/ztna/venv/bin/python3 -c "import yaml; yaml.safe_load(open('/opt/ztna/config.yaml'))"
+ExecStart=/bin/bash -c '\
+  /opt/ztna/venv/bin/python3 /opt/ztna/app.py &\
+  /opt/ztna/venv/bin/python3 /opt/ztna/dtls_gateway.py &\
+  wait'
+
+ExecStop=/bin/bash -c 'pkill -f "app.py" || true; pkill -f "dtls_gateway.py" || true'
+
+Restart=on-failure
+RestartSec=5s
+
+# TUNデバイス操作のためにAmbientCapabilitiesを付与
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ztna-server
+
+[Install]
+WantedBy=multi-user.target

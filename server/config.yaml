@@ -1,0 +1,35 @@
+# ZTNA Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+
+jwt:
+  # 本番環境では必ず変更してください！ (32文字以上のランダム文字列を推奨)
+  secret_key: "CHANGE_THIS_SECRET_KEY_IN_PRODUCTION_PLEASE"
+  algorithm: "HS256"
+  expiry_hours: 24
+
+dtls:
+  listen_host: "0.0.0.0"
+  # DTLSリスンポート (UDP 4433。443も利用可能)
+  listen_port: 4433
+  # サーバ証明書・秘密鍵 (gen_certs.sh で生成)
+  cert_path: "/etc/ztna/certs/server.crt"
+  key_path: "/etc/ztna/certs/server.key"
+  # CA証明書 (クライアント証明書の検証用)
+  ca_cert_path: "/etc/ztna/certs/ca.crt"
+  # TUNトンネル内のサーバIPアドレス
+  server_tunnel_ip: "10.100.0.1"
+  # クライアントに割り当てるIPアドレスのプール (CIDR)
+  client_ip_pool: "10.100.0.0/24"
+  # サーバのパブリックIPまたはドメイン名 (クライアント設定に使用)
+  server_endpoint: "YOUR_SERVER_IP_OR_DOMAIN"
+  # MTU (DTLSオーバーヘッドを考慮して1400推奨)
+  mtu: 1400
+  # セッションタイムアウト (秒, JWTのexpiry_hoursと合わせること)
+  session_timeout: 86400
+
+logging:
+  level: "INFO"
+  file: "/var/log/ztna-server.log"

@@ -1,0 +1,7 @@
+{
+  "testuser": {
+    "password_hash": "$2b$12$eImiTXuWVxfM37uY4JANjQ==.example.REPLACE_WITH_REAL_HASH",
+    "role": "user",
+    "comment": "このパスワードハッシュはサンプルです。server/app.py のコメントを参照してください"
+  }
+}

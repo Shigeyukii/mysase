@@ -1,0 +1,4 @@
+{
+  "api_url": "https://YOUR_SERVER_IP:5000",
+  "verify_ssl": false
+}
