@@ -4,24 +4,34 @@ After=network.target
 Wants=network-online.target
 
 [Service]
-Type=forking
+Type=simple
 User=root
 WorkingDirectory=/opt/ztna
 
-# Flask コントロールプレーンをバックグラウンド起動
+# 設定ファイルの事前検証
 ExecStartPre=/opt/ztna/venv/bin/python3 -c "import yaml; yaml.safe_load(open('/opt/ztna/config.yaml'))"
+
+# コントロールプレーン(Flask)とデータプレーン(DTLSゲートウェイ)を同時起動
+# ── foreman的なランチャースクリプトを使う方式 ──
 ExecStart=/bin/bash -c '\
   /opt/ztna/venv/bin/python3 /opt/ztna/app.py &\
+  APP_PID=$!;\
   /opt/ztna/venv/bin/python3 /opt/ztna/dtls_gateway.py &\
+  GW_PID=$!;\
+  echo "started app(PID=$APP_PID) gateway(PID=$GW_PID)";\
   wait'
 
-ExecStop=/bin/bash -c 'pkill -f "app.py" || true; pkill -f "dtls_gateway.py" || true'
+ExecStop=/bin/bash -c '\
+  pkill -TERM -f "python3 /opt/ztna/app.py" || true;\
+  pkill -TERM -f "python3 /opt/ztna/dtls_gateway.py" || true'
 
+KillMode=process
 Restart=on-failure
 RestartSec=5s
 
-# TUNデバイス操作のためにAmbientCapabilitiesを付与
+# TUNデバイス操作のためにケイパビリティを付与
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 
 StandardOutput=journal
 StandardError=journal

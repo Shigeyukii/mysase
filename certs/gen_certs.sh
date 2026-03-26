@@ -1,14 +1,26 @@
 #!/bin/bash
 # ZTNA DTLS 証明書生成スクリプト
 # 自己署名CA, サーバ証明書, クライアント証明書を生成します
+#
+# 使い方:
+#   bash gen_certs.sh [サーバのIPまたはドメイン]
+#
+# 例:
+#   bash gen_certs.sh 203.0.113.10
+#   bash gen_certs.sh ztna.example.com
+#   bash gen_certs.sh          # IPなし (テスト用)
 
 set -e
 
 CERT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DAYS=3650   # 10年有効
+SERVER_ENDPOINT="${1:-}"   # 第1引数: サーバのIPまたはドメイン (省略可)
 
 echo "=== ZTNA DTLS 証明書生成 ==="
 echo "出力先: $CERT_DIR"
+if [ -n "$SERVER_ENDPOINT" ]; then
+  echo "サーバエンドポイント: $SERVER_ENDPOINT"
+fi
 
 # ---- 1. CA (認証局) ----
 echo "[1/3] CA 秘密鍵・証明書を生成中..."
@@ -26,8 +38,9 @@ openssl req -new \
   -out "$CERT_DIR/server.csr" \
   -subj "/CN=ztna-server/O=MySASE/C=JP"
 
-# SAN (Subject Alternative Name) 拡張
-cat > "$CERT_DIR/server_ext.cnf" <<EOF
+# SAN (Subject Alternative Name) 拡張を動的に構築
+SERVER_EXT="$CERT_DIR/server_ext.cnf"
+cat > "$SERVER_EXT" <<EOF
 [req]
 req_extensions = v3_req
 [v3_req]
@@ -36,7 +49,18 @@ subjectAltName = @alt_names
 DNS.1 = ztna-server
 DNS.2 = localhost
 IP.1 = 127.0.0.1
+IP.2 = 10.100.0.1
 EOF
+
+# サーバエンドポイントがIPアドレスかドメインかを判定して追記
+if [ -n "$SERVER_ENDPOINT" ]; then
+  # IPv4アドレスの簡易判定 (数字とドットのみ)
+  if echo "$SERVER_ENDPOINT" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "IP.3 = $SERVER_ENDPOINT" >> "$SERVER_EXT"
+  else
+    echo "DNS.3 = $SERVER_ENDPOINT" >> "$SERVER_EXT"
+  fi
+fi
 
 openssl x509 -req -days $DAYS \
   -in "$CERT_DIR/server.csr" \
@@ -44,7 +68,7 @@ openssl x509 -req -days $DAYS \
   -CAkey "$CERT_DIR/ca.key" \
   -CAcreateserial \
   -out "$CERT_DIR/server.crt" \
-  -extfile "$CERT_DIR/server_ext.cnf" \
+  -extfile "$SERVER_EXT" \
   -extensions v3_req 2>/dev/null
 
 # ---- 3. クライアント証明書 ----
@@ -62,7 +86,7 @@ openssl x509 -req -days $DAYS \
   -out "$CERT_DIR/client.crt" 2>/dev/null
 
 # 一時ファイル削除
-rm -f "$CERT_DIR"/*.csr "$CERT_DIR/server_ext.cnf"
+rm -f "$CERT_DIR"/*.csr "$SERVER_EXT" "$CERT_DIR"/*.srl
 
 # 秘密鍵のパーミッション設定
 chmod 600 "$CERT_DIR"/*.key
@@ -72,6 +96,7 @@ echo "=== 生成完了 ==="
 ls -la "$CERT_DIR"/*.crt "$CERT_DIR"/*.key
 echo ""
 echo "次のステップ:"
-echo "  - server.crt, server.key → Linuxサーバの /etc/ztna/certs/ に配置"
-echo "  - client.crt, client.key → Windowsクライアントのcertsフォルダに配置"
-echo "  - ca.crt → 両方に配置"
+echo "  サーバ側 → Linux:"
+echo "    server.crt, server.key, ca.crt を /etc/ztna/certs/ に配置"
+echo "  クライアント側 → Windows:"
+echo "    client.crt, client.key, ca.crt を client/certs/ に配置"

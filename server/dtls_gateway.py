@@ -32,6 +32,7 @@ except ImportError:
     sys.exit(1)
 
 import tun_manager
+import session_store
 
 # ── 設定読み込み ──────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -185,10 +186,16 @@ class DTLSGateway:
             jti      = payload["jti"]
             username = payload["sub"]
 
-            # ── 2. TUNデバイス作成 ──
-            # client_ip は app.py の _allocate_client_ip と同じロジックで割り当て済み
-            # ここでは jti をキーに採番 (gateway側でも同様に採番)
-            client_ip = _simple_allocate_ip(jti)
+            # ── 2. app.py が割り当てたIPをsession_storeから取得 ──
+            # (app.py の /api/auth/login が事前にIPを割り当て済み)
+            client_ip = session_store.get_session(jti)
+            if client_ip is None:
+                logger.warning("No session found in store for jti=%s, rejecting", jti[:8])
+                conn.sendall(b"ERR:session_not_found")
+                conn.close()
+                return
+            client_ip = client_ip["client_ip"]
+
             tun_fd_val = tun_manager.create_tun(jti, client_ip, self.server_ip, MTU)
 
             # ── 3. セッション登録 ──
@@ -200,6 +207,9 @@ class DTLSGateway:
                     "client_ip": client_ip,
                     "tun_name": tun_fd_val,
                 }
+
+            # session_storeにDTLS確立を記録
+            session_store.mark_dtls_established(jti)
             logger.info(
                 "Session established: user=%s jti=%s client_ip=%s",
                 username, jti[:8], client_ip
@@ -291,25 +301,6 @@ class DTLSGateway:
 
     def stop(self):
         self.running = False
-
-
-# ── IP割り当て (ゲートウェイ側簡易版) ────────────────────────
-import ipaddress as _ipmod
-
-_gw_ip_map: dict = {}
-
-def _simple_allocate_ip(jti: str) -> str:
-    if jti in _gw_ip_map:
-        return _gw_ip_map[jti]
-    pool = _ipmod.ip_network(dtls_cfg["client_ip_pool"])
-    used = set(_gw_ip_map.values())
-    # .1 はサーバ用
-    for host in list(pool.hosts())[1:]:
-        s = str(host)
-        if s not in used:
-            _gw_ip_map[jti] = s
-            return s
-    raise RuntimeError("IP pool exhausted")
 
 
 def _check_disconnect_file(jti: str) -> bool:

@@ -1,7 +1,12 @@
 {
   "testuser": {
-    "password_hash": "$2b$12$eImiTXuWVxfM37uY4JANjQ==.example.REPLACE_WITH_REAL_HASH",
+    "password_hash": "$2b$12$K8GEfGKNM3NVlWn0.xGJlOuvC/6oaAH9CAbWbdKnmzlJKT6u17Rbu",
     "role": "user",
-    "comment": "このパスワードハッシュはサンプルです。server/app.py のコメントを参照してください"
+    "display_name": "Test User"
+  },
+  "admin": {
+    "password_hash": "$2b$12$sZKHfxMBv4EhI8LVxJaLxOPIRLoB6e7B/.sNbnM8f1VBaM0YH3fqO",
+    "role": "admin",
+    "display_name": "Administrator"
   }
 }

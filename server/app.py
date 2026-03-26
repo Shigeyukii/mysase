@@ -7,7 +7,6 @@ ZTNA Flask APIサーバ (DTLS対応版)
 
 import os
 import json
-import hashlib
 import logging
 import yaml
 import bcrypt
@@ -17,6 +16,8 @@ from flask import Flask, request, jsonify
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from functools import wraps
+
+from session_store import SessionStore
 
 # ── 設定読み込み ──────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,16 +44,18 @@ logger = logging.getLogger("ztna.api")
 # ── Flask アプリ ──────────────────────────────────────────────
 app = Flask(__name__)
 
+# ── セッションストア (session_store.py) ───────────────────────
+store = SessionStore(
+    ip_pool_cidr=dtls_cfg["client_ip_pool"],
+    server_tunnel_ip=dtls_cfg["server_tunnel_ip"],
+)
+
 # ── ユーザーDB ────────────────────────────────────────────────
 USER_DB_PATH = os.path.join(BASE_DIR, "user_db.json")
 
 def load_users():
     with open(USER_DB_PATH, encoding="utf-8") as f:
         return json.load(f)
-
-# ── セッション管理 (メモリ, 試作用) ──────────────────────────
-# { jwt_token_id: { "username": str, "client_ip": str, "connected_at": str } }
-active_sessions: dict = {}
 
 # ── 証明書フィンガープリント取得 ──────────────────────────────
 def get_server_cert_fingerprint() -> str:
@@ -125,21 +128,21 @@ def login():
 
     token, jti = generate_jwt(username)
 
-    # セッション登録
-    active_sessions[jti] = {
-        "username": username,
-        "client_ip": request.remote_addr,
-        "connected_at": datetime.now(timezone.utc).isoformat(),
-        "jti": jti,
-    }
-    logger.info("Login success: user='%s' jti='%s'", username, jti)
+    # session_store にセッション登録 (IPも同時に割り当てられる)
+    session = store.create(
+        jti=jti,
+        username=username,
+        client_addr=request.remote_addr,
+    )
+
+    logger.info("Login success: user='%s' jti='%s' tunnel_ip='%s'", username, jti, session.tunnel_ip)
 
     # DTLS接続情報
     dtls_info = {
         "endpoint": dtls_cfg["server_endpoint"],
         "port": dtls_cfg["listen_port"],
         "server_cert_fingerprint": get_server_cert_fingerprint(),
-        "client_tunnel_ip": _allocate_client_ip(jti),
+        "client_tunnel_ip": session.tunnel_ip,
         "server_tunnel_ip": dtls_cfg["server_tunnel_ip"],
         "mtu": dtls_cfg.get("mtu", 1400),
     }
@@ -157,59 +160,25 @@ def logout():
     """セッション終了"""
     jti = request.jwt_payload.get("jti")
     username = request.jwt_payload.get("sub")
-    session = active_sessions.pop(jti, None)
+
+    session = store.delete(jti)
     if session:
         logger.info("Logout: user='%s' jti='%s'", username, jti)
-        # DTLSゲートウェイにセッション切断を通知 (将来: IPC/REST経由)
-        _notify_gateway_disconnect(jti)
+        # DTLSゲートウェイにセッション切断を通知 (ファイルベースIPC)
+        store.notify_disconnect(jti)
+
     return jsonify({"status": "logged out"}), 200
 
 
 @app.get("/api/status")
 def status():
     """接続中セッション一覧 (管理用)"""
-    sessions_info = []
-    for jti, s in active_sessions.items():
-        sessions_info.append({
-            "username": s["username"],
-            "client_ip": s["client_ip"],
-            "connected_at": s["connected_at"],
-            "jti": jti[:8] + "...",
-        })
+    sessions_info = store.list_all()
     return jsonify({
         "status": "ok",
-        "active_sessions": len(active_sessions),
+        "active_sessions": store.count(),
         "sessions": sessions_info,
     }), 200
-
-
-# ── 内部ヘルパー ──────────────────────────────────────────────
-
-_ip_allocations: dict = {}  # jti → allocated_ip
-
-def _allocate_client_ip(jti: str) -> str:
-    """クライアントにトンネルIPを割り当て (試作: 連番)"""
-    import ipaddress
-    pool = ipaddress.ip_network(dtls_cfg["client_ip_pool"])
-    # .1 はサーバ用なので .2 から割り当て
-    hosts = list(pool.hosts())
-    used_ips = set(_ip_allocations.values())
-    for host in hosts[1:]:  # hosts[0] = 10.100.0.1 (サーバ)
-        ip_str = str(host)
-        if ip_str not in used_ips:
-            _ip_allocations[jti] = ip_str
-            logger.debug("Allocated IP %s for jti=%s", ip_str, jti[:8])
-            return ip_str
-    raise RuntimeError("IP pool exhausted")
-
-
-def _notify_gateway_disconnect(jti: str):
-    """DTLSゲートウェイにセッション切断を通知 (試作: ファイル経由)"""
-    disconnect_dir = "/tmp/ztna_disconnect"
-    os.makedirs(disconnect_dir, exist_ok=True)
-    with open(os.path.join(disconnect_dir, jti), "w") as f:
-        f.write(jti)
-    _ip_allocations.pop(jti, None)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -218,5 +187,6 @@ if __name__ == "__main__":
     app.run(
         host=srv_cfg.get("host", "0.0.0.0"),
         port=srv_cfg.get("port", 5000),
+        ssl_context=(dtls_cfg["cert_path"], dtls_cfg["key_path"]),
         debug=srv_cfg.get("debug", False),
     )
